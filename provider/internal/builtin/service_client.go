@@ -2,11 +2,9 @@ package builtin
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -43,7 +41,7 @@ func (p *builtintServiceClient) Evaluate(cap string, conditionInfo []byte) (prov
 		if c.Pattern == "" {
 			return response, fmt.Errorf("could not parse provided file pattern as string: %v", conditionInfo)
 		}
-		matchingFiles, err := findFilesMatchingPattern(p.config.Location, c.Pattern)
+		matchingFiles, err := provider.FindFilesMatchingPattern(p.config.Location, c.Pattern)
 		if err != nil {
 			return response, fmt.Errorf("unable to find files using pattern `%s`: %v", c.Pattern, err)
 		}
@@ -135,40 +133,21 @@ func (p *builtintServiceClient) Evaluate(cap string, conditionInfo []byte) (prov
 		var xmlFiles []string
 		if len(cond.XML.Filepaths) == 0 {
 			pattern := "*.xml"
-			xmlFiles, err = findFilesMatchingPattern(p.config.Location, pattern)
+			xmlFiles, err = provider.FindFilesMatchingPattern(p.config.Location, pattern)
 			if err != nil {
 				return response, fmt.Errorf("Unable to find files using pattern `%s`: %v", pattern, err)
 			}
-			xhtmlFiles, err := findFilesMatchingPattern(p.config.Location, "*.xhtml")
+			xhtmlFiles, err := provider.FindFilesMatchingPattern(p.config.Location, "*.xhtml")
 			if err != nil {
 				return response, fmt.Errorf("Unable to find files using pattern `%s`: %v", "*.xhtml", err)
 			}
 			xmlFiles = append(xmlFiles, xhtmlFiles...)
-		} else if len(cond.XML.Filepaths) == 1 {
-			// Currently, rendering will render a list as a space seperated paths as a single string.
-			patterns := strings.Split(cond.XML.Filepaths[0], " ")
-			for _, pattern := range patterns {
-				files, err := findFilesMatchingPattern(p.config.Location, pattern)
-				if err != nil {
-					// Something went wrong dealing with the pattern, so we'll assume the user input
-					// is good and pass it on
-					// TODO(fabianvf): if we're ever hitting this for real we should investigate
-					fmt.Printf("Unable to resolve pattern '%s': %v", pattern, err)
-					xmlFiles = append(xmlFiles, pattern)
-				} else {
-					xmlFiles = append(xmlFiles, files...)
-				}
+		getxmlFiles, err := provider.Getfiles(provider, p.config.Location, cond.XML.Filepaths)
+			if err != nil {
+				return response, fmt.Errorf("Unable to find XML files: %v", err)
 			}
-		} else {
-			for _, pattern := range cond.XML.Filepaths {
-				files, err := findFilesMatchingPattern(p.config.Location, pattern)
-				if err != nil {
-					xmlFiles = append(xmlFiles, pattern)
-				} else {
-					xmlFiles = append(xmlFiles, files...)
-				}
-			}
-		}
+		xmlFiles = append(xmlFiles, getxmlFiles...)
+
 		for _, file := range xmlFiles {
 			absPath, err := filepath.Abs(file)
 			if err != nil {
@@ -228,7 +207,7 @@ func (p *builtintServiceClient) Evaluate(cap string, conditionInfo []byte) (prov
 			return response, fmt.Errorf("Could not parse provided xpath query as string: %v", conditionInfo)
 		}
 		pattern := "*.json"
-		jsonFiles, err := findFilesMatchingPattern(p.config.Location, pattern)
+		jsonFiles, err := provider.FindFilesMatchingPattern(p.config.Location, pattern)
 		if err != nil {
 			return response, fmt.Errorf("Unable to find files using pattern `%s`: %v", pattern, err)
 		}
@@ -279,31 +258,4 @@ func (p *builtintServiceClient) Evaluate(cap string, conditionInfo []byte) (prov
 	default:
 		return response, fmt.Errorf("capability must be one of %v, not %s", capabilities, cap)
 	}
-}
-
-func findFilesMatchingPattern(root, pattern string) ([]string, error) {
-	var regex *regexp.Regexp
-	// if the regex doesn't compile, we'll default to using filepath.Match on the pattern directly
-	regex, _ = regexp.Compile(pattern)
-	matches := []string{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		var matched bool
-		if regex != nil {
-			matched = regex.MatchString(d.Name())
-		} else {
-			// TODO(fabianvf): is a fileglob style pattern sufficient or do we need regexes?
-			matched, err = filepath.Match(pattern, d.Name())
-			if err != nil {
-				return err
-			}
-		}
-		if matched {
-			matches = append(matches, path)
-		}
-		return nil
-	})
-	return matches, err
 }
